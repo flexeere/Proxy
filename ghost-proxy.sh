@@ -612,7 +612,7 @@ install_proxy() {
     fi
     if [[ -z $PORT ]]; then
         [[ -t 0 ]] || die 'Noninteractive install ke liye --port dein.'
-        IFS= read -r -p 'Proxy port [3128]: ' PORT; PORT=${PORT:-3128}
+        IFS= read -r -p 'Enter Proxy port [Default-3128]: ' PORT; PORT=${PORT:-3128}
     fi
     validate_port "$PORT"
     ALLOW=all
