@@ -1,28 +1,29 @@
 #!/usr/bin/env bash
-# Flexeere Proxy Manager 1.0.0 | 2026-10-27
+# Ghost Proxy Manager 2.0.0 | 2026-10-27
 # Standalone Squid HTTP forward proxy; HTTPS uses CONNECT, without TLS interception.
 # Intended OS: Ubuntu 22.04/24.04/26.04, Debian 12/13, CentOS Stream 9/10.
-# Run: sudo bash flexeere-proxy.sh
-# This file is also its own documentation: bash flexeere-proxy.sh --help
+# Run: sudo bash ghost-proxy.sh
+# This file is also its own documentation: bash ghost-proxy.sh --help
 
 set -Eeuo pipefail
 export LC_ALL=C
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin
 umask 077
 
-VERSION=1.0.0
+VERSION=2.0.0
 CONF=/etc/squid/squid.conf
-PASSFILE=/etc/squid/flexeere.passwd
-STATE=/etc/flexeere-proxy
+PASSFILE=/etc/squid/ghost.passwd
+STATE=/etc/ghost-proxy
 SETTINGS=$STATE/settings.json
-BACKUPS=/var/backups/flexeere-proxy
-MANAGER=/usr/local/sbin/flexeere-proxy
+BACKUPS=/var/backups/ghost-proxy
+MANAGER=/usr/local/sbin/ghost-proxy
 OS_RELEASE=/etc/os-release
 LOG_DIR=/var/log/squid
 UFW_DIR=/etc/ufw/applications.d
-MARKER='# Managed by Flexeere Proxy Manager'
-PORT='' ALLOW='' USERNAME='' PASSWORD='' ZONE='' FW_MODE=auto
-PASS_STDIN=0 TAKEOVER=0 GENERATED=0
+MARKER='# Managed by Ghost Proxy Manager'
+readonly USERNAME='Ghost'
+PORT='' ALLOW='all' PASSWORD='' ZONE='' FW_MODE=auto
+PASS_STDIN=0 RANDOM_PASSWORD=0 TAKEOVER=0 GENERATED=0
 TX='' TX_ACTIVE=0 WAS_ACTIVE=0 WAS_ENABLED=0
 NEW_UFW='' NEW_FW_RUNTIME=0 NEW_FW_PERMANENT=0 NEW_SELINUX=0
 FW_BACKEND=none FW_ZONE='' FW_RUNTIME=0 FW_PERMANENT=0 SELINUX_OWNED=0
@@ -35,69 +36,61 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 usage() {
     cat <<'HELP'
-Flexeere Proxy Manager — port enter karke authenticated proxy banayein.
+Ghost Proxy Manager — one fixed username: Ghost (capital G).
 
-  sudo bash flexeere-proxy.sh                  Interactive menu
-  sudo bash flexeere-proxy.sh install          Guided installation
-  sudo bash flexeere-proxy.sh install --port 8080 --username flexeere
-  sudo flexeere-proxy port 9090                Replace the current listening port
-  sudo flexeere-proxy add-user customer1       Add user / change its password
-  sudo flexeere-proxy delete-user customer1    Remove user (last user is protected)
-  sudo flexeere-proxy users                   List usernames, without passwords
-  sudo flexeere-proxy allow 203.0.113.10/32     Restrict client IP; comma-separated
-  sudo flexeere-proxy allow all               Any source IP, login still required
-  sudo flexeere-proxy status
-  sudo flexeere-proxy restart
+  sudo bash ghost-proxy.sh                    First-time setup / management menu
+  sudo bash ghost-proxy.sh install            Guided first-time installation
+  sudo bash ghost-proxy.sh install --port 8080 --random-password
+  sudo ghost-proxy                            Change port or password
+  sudo ghost-proxy port 9090                  Replace the current listening port
+  sudo ghost-proxy password                   Set a password; blank = random
+  sudo ghost-proxy password --random-password Generate a fresh random password
 
 Install options:
   --port NUMBER         Listening TCP port 1-65535; default 3128
-  --username NAME       1-64 letters, digits, dot, underscore or dash
-  --allow IP/CIDR,...    Allowed IPv4 client networks; default all authenticated
-  --password-stdin      Read one password line from stdin; never pass in argv
-  --takeover            Back up and replace a pre-existing unmanaged Squid config
-  --firewall auto|none  Use active firewalld/UFW, or leave rules to administrator
-  --zone NAME           firewalld ingress zone, useful with multiple active zones
+  --password-stdin      Read one password line from stdin, never from arguments
+  --random-password     Generate a 24-character random password without prompting
+  --takeover            Back up and replace an existing unmanaged Squid config
+  --firewall auto|none  Integrate with active UFW/firewalld, or manage externally
+  --zone NAME           Select the firewalld ingress zone
 
-Without a terminal, install requires --port and --username and either reads
---password-stdin or generates a random password. Blank interactive password also
-generates a password. Passwords must contain 12-72 printable ASCII characters.
+Port changes accept --firewall auto|none and --zone NAME.
+Password changes accept --password-stdin or --random-password.
+Username is always exactly Ghost; it cannot be changed. The active password
+file always has one account. Setup/password changes remove all other entries.
+A port change preserves the current Ghost password and removes other entries.
+Passwords: 5-72 printable ASCII characters. Press Enter for a random password.
+Only a generated password is displayed; passwords are stored as bcrypt hashes.
+Noninteractive install requires --port; without --password-stdin it generates
+a random password. A running instance is managed with port/password, not install.
 
-One listening port is managed at a time; all users share it. IPv4 clients are
-supported. Destination HTTP ports: 80/8080; HTTPS CONNECT ports: 443/8443.
-Local/private/link-local destinations and the server's assigned IPs are blocked.
-The password is required even for localhost. No disk response caching is enabled.
+HTTP proxy / HTTPS CONNECT, one IPv4 listener. Any client IP may authenticate.
+HTTP destination ports: 80/8080; HTTPS CONNECT ports: 443/8443. No domain blocklist.
+Local/private/link-local destinations and server IPs retain the original ACLs.
+The password is required for localhost too. No response disk cache is enabled.
+Basic credentials need a trusted network, VPN or SSH tunnel for transport privacy.
 
-Passwords are stored as bcrypt hashes. New/generated passwords are shown once.
-Proxy Basic login is not encrypted on the client-to-proxy HTTP connection:
-use a trusted network, VPN or SSH tunnel for that connection.
+Test (curl prompts for the password):
+  curl --noproxy '' --proxy http://SERVER_IP:8080 --proxy-user Ghost https://example.com
 
-Test from your computer (curl prompts for the password):
-  curl --noproxy '' --proxy http://SERVER_IP:8080 --proxy-user flexeere https://example.com
-
-Change port and allow commands accept --firewall auto|none and --zone NAME.
-When no managed firewall is active, custom nftables/iptables and upstream/cloud
-firewall rules need to be allowed separately. The script never flushes rules,
-enables a firewall, disables SELinux, changes SSH, or changes IP forwarding.
-
-Files: /etc/squid/squid.conf, /etc/squid/flexeere.passwd,
-       /etc/flexeere-proxy/settings.json
-Backups: /var/backups/flexeere-proxy/<timestamp>/
+The script opens only its proxy TCP port in an active supported firewall.
+Custom nftables/iptables and upstream firewall rules are managed separately.
+Existing administrator rules, SSH configuration and SELinux remain intact.
+Files: /etc/squid/squid.conf, /etc/squid/ghost.passwd,
+       /etc/ghost-proxy/settings.json
+Backups: /var/backups/ghost-proxy/<timestamp>/ (root-only, password hashes)
 Logs: /var/log/squid/access.log and /var/log/squid/cache.log
-Config/password/settings files and new firewall/SELinux additions are rolled
-back on failed changes. Installed packages are retained after failure. Rules
-that existed before installation are retained. Backups contain password hashes;
-they are root-only. Package-provided log rotation remains in use.
-After an administrator changes the main config, port/allow commands regenerate
-the managed file; an external custom config is never overwritten silently.
+Failed config, password, service and firewall changes restore the prior files
+and service. Installed packages remain installed after a failure.
 
-CentOS Linux 7/8 and Stream 8 are unsupported because their normal support ended.
-All commands need root except --help/--version. A systemd VM/server and working
-OS package repositories are required; containers without systemd are excluded.
+Supported: Ubuntu 22.04/24.04/26.04, Debian 12/13, CentOS Stream 9/10.
+A systemd VM/server and working OS package repositories are required.
+All actions except --help/--version require root.
 HELP
 }
 
 require_root() {
-    (( EUID == 0 )) || die 'Root se chalayein: sudo bash flexeere-proxy.sh'
+    (( EUID == 0 )) || die 'Root se chalayein: sudo bash ghost-proxy.sh'
 }
 
 detect_os() {
@@ -126,9 +119,7 @@ validate_port() {
     PORT=$value
 }
 
-validate_user() {
-    [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$ ]] || die 'Username: 1-64 letters/digits/._-; first character letter/digit.'
-}
+
 
 normalize_allow() {
     python3 - "$1" <<'PY'
@@ -155,12 +146,14 @@ PY
 
 read_password() {
     local confirm=''
-    GENERATED=0
-    if (( PASS_STDIN )); then
+    PASSWORD=''; GENERATED=0
+    if (( RANDOM_PASSWORD )); then
+        :
+    elif (( PASS_STDIN )); then
         IFS= read -r PASSWORD || [[ -n $PASSWORD ]] || die 'stdin par password line dein.'
-        [[ -n $PASSWORD ]] || die 'Empty stdin password allowed nahi hai.'
+        [[ -n $PASSWORD ]] || die 'Empty stdin password allowed nahi hai; --random-password use karein.'
     elif [[ -t 0 ]]; then
-        IFS= read -r -s -p 'Password (blank = auto-generate): ' PASSWORD
+        IFS= read -r -s -p 'Ghost password (Enter = random): ' PASSWORD
         printf '\n'
         if [[ -n $PASSWORD ]]; then
             IFS= read -r -s -p 'Confirm password: ' confirm
@@ -172,28 +165,39 @@ read_password() {
         PASSWORD=$(python3 -c 'import secrets; print(secrets.token_hex(12))')
         GENERATED=1
     fi
-    [[ ${#PASSWORD} -ge 5 && ${#PASSWORD} -le 25 && $PASSWORD != *[![:print:]]* ]] ||
-        die 'Password 5-25 printable ASCII characters ka rakhein.'
+    [[ ${#PASSWORD} -ge 5 && ${#PASSWORD} -le 72 && $PASSWORD != *[![:print:]]* ]] ||
+        die 'Password 5-72 printable ASCII characters ka rakhein.'
 }
 
 parse_options() {
+    local context=$1; shift
     while (( $# )); do
         case "$1" in
-            --port|--username|--allow|--firewall|--zone)
+            --port|--firewall|--zone)
                 (( $# >= 2 )) || die "$1 ke baad value dein."
                 case "$1" in
-                    --port) PORT=$2 ;;
-                    --username) USERNAME=$2 ;;
-                    --allow) ALLOW=$2 ;;
-                    --firewall) FW_MODE=$2 ;;
-                    --zone) ZONE=$2 ;;
+                    --port)
+                        [[ $context == install ]] || die '--port sirf install ke saath use karein.'
+                        PORT=$2 ;;
+                    --firewall)
+                        [[ $context == install || $context == port ]] || die '--firewall install/port ke saath use karein.'
+                        FW_MODE=$2 ;;
+                    --zone)
+                        [[ $context == install || $context == port ]] || die '--zone install/port ke saath use karein.'
+                        ZONE=$2 ;;
                 esac
                 shift 2 ;;
-            --password-stdin) PASS_STDIN=1; shift ;;
-            --takeover) TAKEOVER=1; shift ;;
+            --password-stdin|--random-password)
+                [[ $context == install || $context == password ]] || die 'Password option install/password ke saath use karein.'
+                if [[ $1 == --password-stdin ]]; then PASS_STDIN=1; else RANDOM_PASSWORD=1; fi
+                shift ;;
+            --takeover)
+                [[ $context == install ]] || die '--takeover sirf install ke saath use karein.'
+                TAKEOVER=1; shift ;;
             *) die "Unknown option: $1 (use --help)." ;;
         esac
     done
+    (( ! (PASS_STDIN && RANDOM_PASSWORD) )) || die '--password-stdin aur --random-password mein se ek choose karein.'
     [[ $FW_MODE == auto || $FW_MODE == none ]] || die '--firewall auto ya none use karein.'
     [[ -z $ZONE || $ZONE =~ ^[A-Za-z0-9_-]+$ ]] || die 'Invalid firewalld zone.'
 }
@@ -323,12 +327,15 @@ check_port_available() {
 
 write_user() {
     local tmp reply
-    tmp=$(mktemp "$(dirname "$PASSFILE")/.flexeere-passwd.XXXXXX")
-    if [[ -f $PASSFILE ]]; then cp -- "$PASSFILE" "$tmp"; fi
-    # -i reads the password from stdin, never from process arguments.
-    if ! printf '%s\n' "$PASSWORD" | htpasswd -iB -C 10 "$tmp" "$USERNAME" >/dev/null 2>&1; then
+    tmp=$(mktemp "$(dirname "$PASSFILE")/.ghost-passwd.XXXXXX")
+    # Create a NEW file, never copy the previous multi-user database.
+    # -i reads the password from stdin; -c truncates the temporary database.
+    if ! printf '%s\n' "$PASSWORD" | htpasswd -ciB -C 10 "$tmp" "$USERNAME" >/dev/null 2>&1; then
         rm -f -- "$tmp"; die 'Password hash create nahi hua.'
     fi
+    [[ $(awk -F: 'NF {n++; if ($1 != "Ghost" || NF != 2) bad=1} END {print (n==1 && !bad)?"yes":"no"}' "$tmp") == yes ]] || {
+        rm -f -- "$tmp"; die 'Single Ghost account validation fail hui.';
+    }
     chown "root:$RUN_GROUP" "$tmp"
     chmod 640 "$tmp"
     mv -f -- "$tmp" "$PASSFILE"
@@ -337,6 +344,19 @@ write_user() {
         'import sys, urllib.parse; print(sys.argv[1]+" "+urllib.parse.quote(sys.stdin.read(),safe=""))' "$USERNAME" | \
         runuser -u "$RUN_USER" -- "$AUTH_HELPER" "$PASSFILE")
     [[ $reply == OK* ]] || die 'Squid helper bcrypt/password verify nahi kar saka; packages update karein.'
+}
+
+keep_single_user() {
+    local tmp
+    [[ -f $PASSFILE ]] || die 'Ghost password missing hai; ghost-proxy password chalayein.'
+    tmp=$(mktemp "$(dirname "$PASSFILE")/.ghost-passwd.XXXXXX")
+    if ! awk -F: '$1 == "Ghost" && NF == 2 && length($2) {print; n++} END {if (n != 1) exit 1}' "$PASSFILE" > "$tmp"; then
+        rm -f -- "$tmp"; die 'Exactly one Ghost password entry chahiye; ghost-proxy password chalayein.'
+    fi
+    chown "root:$RUN_GROUP" "$tmp"
+    chmod 640 "$tmp"
+    mv -f -- "$tmp" "$PASSFILE"
+    command -v restorecon >/dev/null && restorecon "$PASSFILE" || true
 }
 
 server_addresses() {
@@ -353,21 +373,22 @@ print(" ".join(sorted(addresses)))'
 
 write_config() {
     local tmp local_ips sources
-    tmp=$(mktemp "$(dirname "$CONF")/.flexeere-conf.XXXXXX")
+    tmp=$(mktemp "$(dirname "$CONF")/.ghost-conf.XXXXXX")
     local_ips=$(server_addresses)
     cat > "$tmp" <<CONFIG
 $MARKER
-# Generated settings: sudo flexeere-proxy --help
+# Generated settings: sudo ghost-proxy --help
 http_port 0.0.0.0:$PORT
-visible_hostname flexeere-proxy
+visible_hostname ghost-proxy
 cache_effective_user $RUN_USER
 cache_effective_group $RUN_GROUP
 
 auth_param basic program $AUTH_HELPER $PASSFILE
 auth_param basic children 10 startup=2 idle=2
-auth_param basic realm Flexeere Proxy
+auth_param basic realm Ghost Proxy
 auth_param basic credentialsttl 1 minute
-acl authenticated proxy_auth REQUIRED
+auth_param basic casesensitive on
+acl authenticated proxy_auth Ghost
 acl loopback_client src 127.0.0.1/32
 acl Safe_ports port 80 443 8080 8443
 acl SSL_ports port 443 8443
@@ -469,7 +490,7 @@ configure_firewall() {
         fi
     elif (( ufw_active )); then
         FW_BACKEND=ufw
-        local app="FlexeereProxy-$PORT" profile
+        local app="GhostProxy-$PORT" profile
         profile="$UFW_DIR/$app"
         if [[ $PORT == "$OLD_PORT" && $OLD_BACKEND == ufw && $OLD_RUNTIME == 1 ]]; then
             FW_RUNTIME=1
@@ -477,7 +498,7 @@ configure_firewall() {
         else
             [[ ! -e $profile && ! -L $profile ]] || die "Existing UFW profile conflict: $profile"
             NEW_UFW=$app
-            printf '[%s]\ntitle=Flexeere authenticated proxy\ndescription=Managed by Flexeere Proxy Manager\nports=%s/tcp\n' "$app" "$PORT" > "$profile"
+            printf '[%s]\ntitle=Ghost authenticated proxy\ndescription=Managed by Ghost Proxy Manager\nports=%s/tcp\n' "$app" "$PORT" > "$profile"
             chmod 644 "$profile"
             ufw allow "$app"
             FW_RUNTIME=1
@@ -493,7 +514,7 @@ save_settings() {
     python3 - "$PORT" "$ALLOW" "$FW_BACKEND" "$FW_ZONE" "$FW_RUNTIME" "$FW_PERMANENT" "$SELINUX_OWNED" > "$tmp" <<'PY'
 import json, sys
 port, allow, firewall, zone, runtime, permanent, selinux = sys.argv[1:]
-json.dump(dict(schema=1, port=int(port), allow=allow, firewall=firewall, zone=zone,
+json.dump(dict(schema=1, username="Ghost", port=int(port), allow=allow, firewall=firewall, zone=zone,
                runtime_owned=bool(int(runtime)), permanent_owned=bool(int(permanent)),
                selinux_owned=bool(int(selinux))), sys.stdout, indent=2)
 print()
@@ -528,9 +549,9 @@ retire_old_rules() {
             if (( OLD_RUNTIME )); then firewall-cmd --zone="$OLD_ZONE" --remove-port="$OLD_PORT/tcp" || warn "Old runtime rule $OLD_PORT remove manually."; fi
             if (( OLD_PERMANENT )); then firewall-cmd --permanent --zone="$OLD_ZONE" --remove-port="$OLD_PORT/tcp" || warn "Old permanent rule $OLD_PORT remove manually."; fi
         elif [[ $OLD_BACKEND == ufw && $OLD_RUNTIME == 1 ]]; then
-            if ufw --force delete allow "FlexeereProxy-$OLD_PORT"; then
-                rm -f -- "$UFW_DIR/FlexeereProxy-$OLD_PORT"
-            else warn "Old UFW profile FlexeereProxy-$OLD_PORT remove manually."; fi
+            if ufw --force delete allow "GhostProxy-$OLD_PORT"; then
+                rm -f -- "$UFW_DIR/GhostProxy-$OLD_PORT"
+            else warn "Old UFW profile GhostProxy-$OLD_PORT remove manually."; fi
         fi
     fi
     if [[ -n $OLD_PORT && $PORT != "$OLD_PORT" && $OLD_SELINUX == 1 ]]; then
@@ -550,126 +571,100 @@ apply_change() {
 }
 
 show_connection() {
-    say "Proxy ready: SERVER_PUBLIC_IP:$PORT (HTTP proxy / HTTPS CONNECT)"
-    if [[ -n $USERNAME ]]; then say "Username: $USERNAME"; fi
+    say "Ghost proxy ready: SERVER_PUBLIC_IP:$PORT (HTTP proxy / HTTPS CONNECT)"
+    say "Username: $USERNAME"
     if (( GENERATED )); then
         say "Generated password: $PASSWORD"
-        say 'Is password ko ab save kar lein; plaintext file mein store nahi hota.'
+        say 'Is password ko save kar lein; plaintext file mein store nahi hota.'
+    elif [[ -n $PASSWORD ]]; then
+        say 'Password: aapka set kiya hua password.'
+    else
+        say 'Password: unchanged.'
     fi
-    say "Allowed clients: $ALLOW (localhost bhi login ke baad allowed hai)"
-    say 'Manage later: sudo flexeere-proxy'
+    say 'Manage later: sudo ghost-proxy'
 }
 
 install_proxy() {
-    parse_options "$@"
-    [[ ! -f $SETTINGS ]] || die 'Already managed. Menu, port, add-user ya allow command use karein.'
+    parse_options install "$@"
+    [[ ! -f $SETTINGS ]] || die 'Already managed. ghost-proxy menu, port ya password command use karein.'
     assert_regular_paths
     if [[ -f $CONF && $TAKEOVER == 0 ]]; then
         if [[ -t 0 ]]; then
             local answer
-            say 'Existing Squid configuration mili. Backup lekar managed config replace hogi.'
+            say 'Existing Squid configuration mili. Backup lekar Ghost setup replace karega.'
             IFS= read -r -p 'Take over? Type YES: ' answer
             [[ $answer == YES ]] || die 'No changes made.'
-        else die 'Existing Squid config: replacement ke liye explicit --takeover dein.'; fi
+        else die 'Existing Squid config: replacement ke liye --takeover dein.'; fi
     fi
     if [[ -z $PORT ]]; then
         [[ -t 0 ]] || die 'Noninteractive install ke liye --port dein.'
         IFS= read -r -p 'Proxy port [3128]: ' PORT; PORT=${PORT:-3128}
     fi
     validate_port "$PORT"
-    if [[ -z $USERNAME ]]; then
-        [[ -t 0 ]] || die 'Noninteractive install ke liye --username dein.'
-        IFS= read -r -p 'Proxy username [Ghost]: ' USERNAME; USERNAME=Ghost
-    fi
-    validate_user "$USERNAME"
-    [[ -n $ALLOW ]] || ALLOW=all
+    ALLOW=all
+    say 'Fixed username: Ghost'
     # Snapshot before package installation, which may start a default service.
     begin_transaction
     install_packages
     find_runtime
-    ALLOW=$(normalize_allow "$ALLOW") || die 'Allowed client networks invalid hain.'
     read_password
     install -d -m 755 "$(dirname "$CONF")"
     install -d -o "$RUN_USER" -g "$RUN_GROUP" -m 750 "$LOG_DIR"
-    : > "$PASSFILE"
     write_user
     apply_change
-    # A manager installation failure must be reported without undoing a working proxy.
-    if [[ $(readlink -f -- "${BASH_SOURCE[0]}") != "$MANAGER" ]]; then
-        install -o root -g root -m 750 -- "${BASH_SOURCE[0]}" "$MANAGER" || warn 'Manager copy failed; downloaded script se commands chalayein.'
-    fi
+    install_manager
     show_connection
 }
 
+install_manager() {
+    if [[ $(readlink -f -- "${BASH_SOURCE[0]}") != "$MANAGER" ]]; then
+        install -o root -g root -m 750 -- "${BASH_SOURCE[0]}" "$MANAGER" || warn 'Manager copy failed; downloaded script se commands chalayein.'
+    fi
+}
+
 change_port() {
-    (( $# )) || die 'Usage: flexeere-proxy port 8080 [--zone public]'
+    (( $# )) || die 'Usage: ghost-proxy port 8080 [--zone public]'
     local requested=$1; shift
-    load_settings; parse_options "$@"; validate_port "$requested"
-    find_runtime; begin_transaction; apply_change; show_connection
+    load_settings; parse_options port "$@"; validate_port "$requested"
+    find_runtime; begin_transaction; keep_single_user; apply_change
+    install_manager; show_connection
 }
 
-change_allow() {
-    (( $# )) || die 'Usage: flexeere-proxy allow IP/CIDR,... | all'
-    local requested=$1; shift
-    load_settings; parse_options "$@"
-    ALLOW=$(normalize_allow "$requested") || die 'Allowed client networks invalid hain.'
-    find_runtime; begin_transaction; apply_change; show_connection
-}
 
-add_user() {
-    (( $# )) || die 'Usage: flexeere-proxy add-user USERNAME [--password-stdin]'
-    USERNAME=$1; shift
-    validate_user "$USERNAME"; load_settings; parse_options "$@"; find_runtime
-    read_password; begin_transaction; write_user; verify_service
-    TX_ACTIVE=0
-    say "User ready: $USERNAME"
-    if (( GENERATED )); then say "Generated password: $PASSWORD"; fi
-}
 
-delete_user() {
-    (( $# == 1 )) || die 'Usage: flexeere-proxy delete-user USERNAME'
-    USERNAME=$1
-    validate_user "$USERNAME"; load_settings; find_runtime
-    awk -F: -v u="$USERNAME" '$1==u{found=1} END{exit !found}' "$PASSFILE" || die 'User nahi mila.'
-    [[ $(awk 'NF{n++} END{print n+0}' "$PASSFILE") -gt 1 ]] || die 'Last user delete nahi kar sakte.'
+change_password() {
+    load_settings; parse_options password "$@"; find_runtime
+    read_password
     begin_transaction
-    htpasswd -D "$PASSFILE" "$USERNAME" >/dev/null 2>&1
-    verify_service; TX_ACTIVE=0
-    say "User removed: $USERNAME"
+    write_user
+    write_config
+    # Restart clears cached credentials and disconnects sessions using old ones.
+    verify_service
+    TX_ACTIVE=0
+    install_manager
+    show_connection
 }
 
-show_status() {
-    load_settings
-    say "Configured proxy port: $PORT | Allowed clients: $ALLOW"
-    say "Firewall integration: $OLD_BACKEND ${OLD_ZONE:-}"
-    systemctl status squid --no-pager --full || true
-    ss -ltn "sport = :$PORT"
-    say 'Logs: sudo journalctl -u squid -n 50 --no-pager'
-}
+
+
+
 
 menu() {
     local choice value
-    say "Flexeere Proxy Manager $VERSION"
-    say '1) Install proxy'
-    say '2) Change proxy port'
-    say '3) Add user / change password'
-    say '4) Delete user'
-    say '5) List users'
-    say '6) Set allowed client IP/CIDR (or all)'
-    say '7) Status'
-    say '8) Restart'
+    [[ -t 0 ]] || die 'Menu needs a terminal. Use install --port PORT, port PORT, password, or --help.'
+    if ! is_managed; then
+        install_proxy
+        return
+    fi
+    load_settings
+    say "Ghost Proxy Manager $VERSION | Username: Ghost | Port: $PORT"
+    say '1) Change proxy port'
+    say '2) Change password (manual / random)'
     say '0) Exit'
-    [[ -t 0 ]] || die 'Menu needs a terminal. Use install --port PORT --username USER or --help.'
     IFS= read -r -p 'Option: ' choice
     case "$choice" in
-        1) install_proxy ;;
-        2) IFS= read -r -p 'New port: ' value; change_port "$value" ;;
-        3) IFS= read -r -p 'Username: ' value; add_user "$value" ;;
-        4) IFS= read -r -p 'Username: ' value; delete_user "$value" ;;
-        5) load_settings; cut -d: -f1 "$PASSFILE" ;;
-        6) IFS= read -r -p 'Allowed IPv4 IP/CIDR comma-separated [all]: ' value; change_allow "${value:-all}" ;;
-        7) show_status ;;
-        8) load_settings; find_runtime; verify_service; say 'Restart successful.' ;;
+        1) IFS= read -r -p 'New port: ' value; change_port "$value" ;;
+        2) change_password ;;
         0) return ;;
         *) die 'Invalid menu option.' ;;
     esac
@@ -677,14 +672,20 @@ menu() {
 
 main() {
     local command=${1:-menu}
-    case "$command" in --help|-h|help) usage; return;; --version) say "$VERSION"; return;; esac
+    case "$command" in
+        --help|-h|help) usage; return ;;
+        --version) say "$VERSION"; return ;;
+        menu|install|port|password) ;;
+        *) die "Unknown command: $command. Sirf port ya password change kar sakte hain (use --help)." ;;
+    esac
     (( $# == 0 )) || shift
+    if [[ $command == menu ]] && (( $# )); then die 'Menu extra arguments accept nahi karta.'; fi
     require_root
     detect_os
     require_systemd
     command -v flock >/dev/null || die 'util-linux (flock) install karein.'
-    exec 9>/run/lock/flexeere-proxy.lock
-    flock -n 9 || die 'Another proxy management command chal raha hai.'
+    exec 9>/run/lock/ghost-proxy.lock
+    flock -n 9 || die 'Another Ghost proxy management command chal raha hai.'
     trap cleanup EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
@@ -693,13 +694,7 @@ main() {
         menu) menu ;;
         install) install_proxy "$@" ;;
         port) change_port "$@" ;;
-        allow) change_allow "$@" ;;
-        add-user) add_user "$@" ;;
-        delete-user) delete_user "$@" ;;
-        users) load_settings; cut -d: -f1 "$PASSFILE" ;;
-        status) show_status ;;
-        restart) load_settings; find_runtime; verify_service; say 'Restart successful.' ;;
-        *) die "Unknown command: $command (use --help)." ;;
+        password) change_password "$@" ;;
     esac
 }
 
