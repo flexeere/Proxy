@@ -558,7 +558,6 @@ show_connection() {
     fi
     say "Allowed clients: $ALLOW (localhost bhi login ke baad allowed hai)"
     say 'Manage later: sudo flexeere-proxy'
-    say "Test: curl --noproxy '' --proxy http://SERVER_PUBLIC_IP:$PORT --proxy-user ${USERNAME:-USERNAME} https://example.com"
 }
 
 install_proxy() {
@@ -580,7 +579,7 @@ install_proxy() {
     validate_port "$PORT"
     if [[ -z $USERNAME ]]; then
         [[ -t 0 ]] || die 'Noninteractive install ke liye --username dein.'
-        IFS= read -r -p 'Proxy username [flexeere]: ' USERNAME; USERNAME=${USERNAME:-flexeere}
+        IFS= read -r -p 'Proxy username [Ghost]: ' USERNAME; USERNAME=Ghost
     fi
     validate_user "$USERNAME"
     [[ -n $ALLOW ]] || ALLOW=all
