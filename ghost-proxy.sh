@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Ghost Proxy Manager 2.0.0 | 2026-10-27
+# Ghost Proxy Manager 2.0.2 | 2026-10-27
 # Standalone Squid HTTP forward proxy; HTTPS uses CONNECT, without TLS interception.
 # Intended OS: Ubuntu 22.04/24.04/26.04, Debian 12/13, CentOS Stream 9/10.
 # Run: sudo bash ghost-proxy.sh
@@ -10,7 +10,7 @@ export LC_ALL=C
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin
 umask 077
 
-VERSION=2.0.0
+VERSION=2.0.2
 CONF=/etc/squid/squid.conf
 PASSFILE=/etc/squid/ghost.passwd
 STATE=/etc/ghost-proxy
@@ -61,6 +61,8 @@ file always has one account. Setup/password changes remove all other entries.
 A port change preserves the current Ghost password and removes other entries.
 Passwords: 5-72 printable ASCII characters. Press Enter for a random password.
 Only a generated password is displayed; passwords are stored as bcrypt hashes.
+Terminal output highlights username in cyan, generated password in green, port in yellow.
+Redirected output stays plain text; NO_COLOR disables terminal colors.
 Noninteractive install requires --port; without --password-stdin it generates
 a random password. A running instance is managed with port/password, not install.
 
@@ -570,16 +572,28 @@ apply_change() {
     retire_old_rules
 }
 
+show_credential() {
+    local color=$1 label=$2 value=$3
+    if [[ -t 1 && ${TERM:-dumb} != dumb && -z ${NO_COLOR+x} ]]; then
+        printf '\033[1;%sm%s: %s\033[0m\n' "$color" "$label" "$value"
+    else
+        printf '%s: %s\n' "$label" "$value"
+    fi
+}
+
 show_connection() {
     say "Ghost proxy ready: SERVER_PUBLIC_IP:$PORT (HTTP proxy / HTTPS CONNECT)"
-    say "Username: $USERNAME"
+    show_credential 36 'Username' "$USERNAME"
     if (( GENERATED )); then
-        say "Generated password: $PASSWORD"
-        say 'Is password ko save kar lein; plaintext file mein store nahi hota.'
+        show_credential 32 'Generated password' "$PASSWORD"
     elif [[ -n $PASSWORD ]]; then
         say 'Password: aapka set kiya hua password.'
     else
         say 'Password: unchanged.'
+    fi
+    show_credential 33 'Port' "$PORT"
+    if (( GENERATED )); then
+        say 'Is password ko save kar lein; plaintext file mein store nahi hota.'
     fi
     say 'Manage later: sudo ghost-proxy'
 }
